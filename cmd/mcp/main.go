@@ -40,7 +40,7 @@ func main() {
 
 	viper.SetEnvPrefix("MCP")
 	viper.AutomaticEnv()
-	viper.SetDefault("greeting", "Hello")
+	viper.SetDefault("greeting", "HOLA")
 	viper.SetDefault("secret", "Hello")
 
 	rootCmd.AddCommand(stdioCmd)
