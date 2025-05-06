@@ -12,7 +12,7 @@
       "password": true
     },
     {
-      "id": "OPEN_API_KEY",
+      "id": "MCP_OPEN_API_KEY",
       "type": "promptString",
       "description": "OpenAI API key for the hello tool and prompt",
       "password": true
@@ -25,7 +25,7 @@
       "env": {
         "MCP_GREETING": "${input:MCP_GREETING}",
         "MCP_SECRET": "${input:MCP_SECRET}",
-        "OPEN_API_KEY": "${env:OPEN_API_KEY}"
+        "MCP_OPEN_API_KEY": "${input:MCP_OPEN_API_KEY}"
       }
     }
   }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -128,32 +129,36 @@ func NewTextToSpeechTool() (mcp.Tool, server.ToolHandlerFunc) {
 			mcp.Description("The OpenAI voice to use"),
 			mcp.Enum("alloy", "echo", "fable", "onyx", "nova", "shimmer"),
 		),
-		mcp.WithString("outputFile",
-			mcp.Required(),
-			mcp.Description("The path where to save the MP3 file"),
-		),
 	)
 
 	handler := func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		log.Println("Starting text-to-speech conversion")
+
 		text, ok := request.Params.Arguments["text"].(string)
 		if !ok || text == "" {
+			log.Println("Error: text parameter missing or empty")
 			return mcp.NewToolResultError("text must be a non-empty string"), nil
 		}
-
-		outputFile, ok := request.Params.Arguments["outputFile"].(string)
-		if !ok || outputFile == "" {
-			return mcp.NewToolResultError("outputFile must be a non-empty string"), nil
-		}
+		log.Printf("Processing text of length: %d characters", len(text))
 
 		voice := "alloy" // default voice
 		if voiceArg, ok := request.Params.Arguments["voice"].(string); ok && voiceArg != "" {
 			voice = voiceArg
 		}
+		log.Printf("Using voice: %s", voice)
 
 		// Get OpenAI API key from environment
-		apiKey := viper.GetString("OPEN_API_KEY")
+		apiKey := viper.GetString("open_api_key")
 		if apiKey == "" {
-			return mcp.NewToolResultError("OPEN_API_KEY environment variable is not set"), nil
+			log.Println("Error: OpenAI API key not found in environment")
+			return mcp.NewToolResultError("MCP_OPEN_API_KEY environment variable is not set"), nil
+		}
+		log.Println("Successfully retrieved API key")
+
+		// Validate text length (OpenAI has a limit)
+		if len(text) > 4096 {
+			log.Printf("Error: Text length %d exceeds maximum of 4096 characters", len(text))
+			return mcp.NewToolResultError("Text is too long. Maximum length is 4096 characters."), nil
 		}
 
 		// Create the OpenAI request
@@ -166,40 +171,74 @@ func NewTextToSpeechTool() (mcp.Tool, server.ToolHandlerFunc) {
 
 		jsonData, err := json.Marshal(openaiRequest)
 		if err != nil {
+			log.Printf("Error marshalling request: %v", err)
 			return mcp.NewToolResultError(fmt.Sprintf("failed to create request: %v", err)), nil
 		}
+		log.Println("Created OpenAI request payload")
 
 		req, err := http.NewRequestWithContext(ctx, "POST", "https://api.openai.com/v1/audio/speech", bytes.NewBuffer(jsonData))
 		if err != nil {
+			log.Printf("Error creating HTTP request: %v", err)
 			return mcp.NewToolResultError(fmt.Sprintf("failed to create request: %v", err)), nil
 		}
 
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
+		log.Println("Making request to OpenAI API")
 
 		resp, err := client.Do(req)
 		if err != nil {
+			log.Printf("Error calling OpenAI API: %v", err)
 			return mcp.NewToolResultError(fmt.Sprintf("failed to call OpenAI: %v", err)), nil
 		}
 		defer resp.Body.Close()
+		log.Printf("Received response from OpenAI with status: %d", resp.StatusCode)
 
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
+			log.Printf("OpenAI API error - Status: %d, Body: %s", resp.StatusCode, string(body))
 			return mcp.NewToolResultError(fmt.Sprintf("OpenAI returned unexpected status code: %d\nResponse: %s", resp.StatusCode, string(body))), nil
 		}
 
-		// Read the audio data from the response
-		audioData, err := io.ReadAll(resp.Body)
+		// Create a pipe to mpg123
+		log.Println("Setting up mpg123 command")
+		mpg123Cmd := exec.Command("mpg123", "-")
+		mpg123Cmd.Stdout = os.Stdout
+		mpg123Cmd.Stderr = os.Stderr
+
+		stdin, err := mpg123Cmd.StdinPipe()
 		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("failed to read audio data: %v", err)), nil
+			log.Printf("Error creating pipe to mpg123: %v", err)
+			return mcp.NewToolResultError(fmt.Sprintf("failed to create pipe to mpg123: %v", err)), nil
 		}
 
-		// Save the audio data to the specified file
-		if err := os.WriteFile(outputFile, audioData, 0644); err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("failed to save audio file: %v", err)), nil
+		// Start mpg123
+		log.Println("Starting mpg123")
+		if err := mpg123Cmd.Start(); err != nil {
+			log.Printf("Error starting mpg123: %v", err)
+			return mcp.NewToolResultError(fmt.Sprintf("failed to start mpg123: %v", err)), nil
 		}
 
-		return mcp.NewToolResultText(fmt.Sprintf("Successfully saved audio to %s", outputFile)), nil
+		// Copy audio data from response to mpg123
+		log.Println("Piping audio data to mpg123")
+		if _, err := io.Copy(stdin, resp.Body); err != nil {
+			log.Printf("Error piping audio data: %v", err)
+			return mcp.NewToolResultError(fmt.Sprintf("failed to pipe audio data: %v", err)), nil
+		}
+
+		// Close stdin to signal end of input
+		stdin.Close()
+		log.Println("Closed stdin pipe")
+
+		// Wait for mpg123 to finish
+		log.Println("Waiting for mpg123 to finish")
+		if err := mpg123Cmd.Wait(); err != nil {
+			log.Printf("Error from mpg123: %v", err)
+			return mcp.NewToolResultError(fmt.Sprintf("mpg123 failed: %v", err)), nil
+		}
+
+		log.Println("Text-to-speech conversion completed successfully")
+		return mcp.NewToolResultText("Successfully played audio"), nil
 	}
 	return tool, handler
 }
@@ -260,6 +299,6 @@ func RegisterTools(s *server.MCPServer) {
 	ttsTool, ttsHandler := NewTextToSpeechTool()
 	s.AddTool(ttsTool, ttsHandler)
 
-	macSayTool, macSayHandler := NewMacSayTool()
-	s.AddTool(macSayTool, macSayHandler)
+	// macSayTool, macSayHandler := NewMacSayTool()
+	// s.AddTool(macSayTool, macSayHandler)
 }

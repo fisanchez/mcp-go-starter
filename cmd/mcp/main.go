@@ -24,6 +24,7 @@ func main() {
 		Run: func(cmd *cobra.Command, args []string) {
 			greeting := viper.GetString("greeting")
 			_ = viper.GetString("secret") // secret is loaded for completeness, but not used directly here
+			apiKey := viper.GetString("open_api_key")
 
 			s := example.NewServer()
 			example.RegisterTools(s)
@@ -31,6 +32,11 @@ func main() {
 			example.RegisterPrompts(s)
 
 			fmt.Fprintf(os.Stderr, "[INFO] Starting MCP server with MCP_GREETING: %s\n", greeting)
+			if apiKey != "" {
+				fmt.Fprintf(os.Stderr, "[INFO] API key loaded\n")
+			} else {
+				fmt.Fprintf(os.Stderr, "[WARNING] No API key found\n")
+			}
 			if err := server.ServeStdio(s); err != nil {
 				fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
 				os.Exit(1)
@@ -42,6 +48,7 @@ func main() {
 	viper.AutomaticEnv()
 	viper.SetDefault("greeting", "HOLA")
 	viper.SetDefault("secret", "Hello")
+	viper.SetDefault("open_api_key", "") // Default is empty string, will be populated from MCP_OPEN_API_KEY environment variable
 
 	rootCmd.AddCommand(stdioCmd)
 
